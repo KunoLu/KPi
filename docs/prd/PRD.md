@@ -276,7 +276,7 @@ omp
 
 ```bash
 kpi
-kpi run "修复登录跳转后返回 404 的问题"
+kpi run -- "修复登录跳转后返回 404 的问题"
 ```
 
 - KPi 启动的 Session 默认 `runtimeMode=enforced`；
@@ -289,7 +289,7 @@ kpi run "修复登录跳转后返回 404 的问题"
 | 命令 | 说明 | 示例 |
 |---|---|---|
 | `/sbtd help [command]` | 显示所有 SBTD 命令，或指定命令的用途、前提、副作用和示例；不调用模型、不修改状态 | `/sbtd help onboard init` |
-| `/sbtd on` | 只设置当前 Session 的 `runtimeMode=enforced`；Preflight 另行重算 Environment Mode 与 Effective Control State | `/sbtd on` |
+| `/sbtd on` | 原子执行“准备目标 Runtime Mode/Profile/Route → 只读 Preflight → 可确定时持久化 `runtimeMode=enforced` 与新的 Environment 观测 → 派生 Effective Control State”；不安装 | `/sbtd on` |
 | `/sbtd off` | 只设置当前 Session 的 `runtimeMode=advisory`；保留 Policy Profile、已加载资产和 Always-on 安全边界 | `/sbtd off` |
 | `/sbtd status` | 按字段名查看 Runtime Mode、Policy Profile、Environment Mode、Effective Control State、阶段、路由、Book Gates、Skills、Tool Evidence 与 Validation Status | `/sbtd status` |
 | `/sbtd route` | 查看或在受控范围内覆盖自动路由 | `/sbtd route bugfix` |
@@ -362,10 +362,9 @@ interface SbtdCommandSpec {
 规则：
 
 - 已注册命令进入命令处理器；
-- 未注册输入才进入 `run/launch`；
-- `/sbtd help` 和 `/sbtd help <nested command>` 不调用模型、不生成 Agent Turn、不修改 Session；
-- 未知命令返回最相近候选，并提示 `/sbtd help`；
-- 帮助输出必须标注 `mutates` 和 `requiresConfirmation`；
+- 裸 `kpi` 只启动交互 Session；单次自然语言必须显式使用 `kpi run -- <prompt>`；
+- 只有已注册命令才进入命令处理器；未匹配的顶层或嵌套 KPi 命令，以及任何未匹配的 `/sbtd ...`，均返回最相近候选和 Help，不创建 Agent Turn；
+- 交互 Session 启动后的普通消息才是 Runtime-owned 的模型输入；
 - `install`、`remove`、`list`、`config`、`provider`、`plugin` 等管理词不得静默发送给 LLM；
 - 全局 Flags 和子命令顺序必须有确定性；
 - P1 Shell Completion 从同一 Registry 生成。
@@ -442,39 +441,28 @@ P0 没有独立 `kpi` CLI，用户直接通过 OMP 使用插件：
 
 ### 8.7 首次执行 `/sbtd on`
 
-`/sbtd on` 必须先执行只读 Preflight：
+`/sbtd on` 是只读 Preflight 包围的原子状态转换：
 
-1. 验证 Plugin 与内置 Kit；
-2. 发现 OMP Global AGENTS、根 Project AGENTS、`.omp/AGENTS.md` Adapter 与更深层 AGENTS；
-3. 发现 Required Skills；
-4. 检查项目事实和 Trellis；
-5. 检查 GitNexus、MCP、Playwright、Maestro 等当前状态；
-6. 检查 OMP 当前 Provider/Model Role 是否可用；
-7. 依照 8.9 的确定性顺序计算 `environmentMode`，再派生 `effectiveControlState`。
+1. 准备目标 `runtimeMode=enforced`、当前 `policyProfile` 与 Route；
+2. 只读发现 Plugin/Kit、AGENTS、Required Skills、项目事实、Tool Evidence，以及 OMP 当前 Provider/Model Role；
+3. 按 `blocked → needs-onboard → degraded → managed` 的确定性顺序计算唯一 `environmentMode`；
+4. 若计算结果可确定，原子写入 `runtimeMode=enforced` 和带时间及输入来源的当前 Environment 观测；
+5. 从已提交字段派生 `effectiveControlState`，再开始自动编排。
 
-Environment Mode 必须依序判定，首个命中项即为唯一结果：
+`blocked`：当前 Route 需要的能力、契约或 Hard Gate 缺失、无效、不安全或不受支持。`needs-onboard`：所选 Profile 的必需基线缺失或无效，且不存在适用的 accepted-skip 记录。`degraded`：缺失项对当前 Route 全部为 Optional，且每项都有匹配资产/能力、scope、Profile、Kit major、未过期的 accepted-skip provenance。`managed`：所选 Profile 的基线和当前 Route 的要求均存在、有效、已生效且 current。
 
-1. `blocked`：当前 Route 需要的能力、契约或 Hard Gate 缺失、无效、不安全或不受支持；
-2. `needs-onboard`：所选 Profile 的必需基线缺失或无效，且不存在适用的 accepted-skip 记录；
-3. `degraded`：缺失项对当前 Route 全部为 Optional，且每项都有匹配资产/能力、scope、Profile、Kit major、未过期的 accepted-skip provenance；
-4. `managed`：所选 Profile 的基线和当前 Route 的要求均存在、有效、已生效且 current。
-
-`degraded` 不是未知状态的兜底，也不能满足缺失 Required capability 的 Route。即使进入 `needs-onboard`，插件仍可提供只读 Doctor、Plan 和基础安全拦截，但不得声称完整 SBTD 环境已激活。
+`degraded` 不是未知状态的兜底，也不能满足缺失 Required capability 的 Route。有效的 `needs-onboard` 或 `blocked` 是可记录的观察结果：插件仍可提供只读 Help、Doctor、Plan 和基础安全拦截，但不得声称完整 SBTD 环境已激活。若 Preflight evaluator 自身失败或无法确定结果，则不写入请求的 Runtime Mode 或伪造 Environment Mode，保留命令前状态并输出诊断和 repair path。
 
 ### 8.8 `/sbtd on` 与 `/sbtd off` 的产品语义
 
-#### `/sbtd on`：Enforced Mode
+`/sbtd on` 不执行安装。它只在当前 Session 内按 8.7 的原子序列完成可确定状态提交后：
 
-`/sbtd on` 不执行安装。它只在当前 Session 内：
-
-- 设置 `runtimeMode=enforced`；
-- 注入可验证的 Runtime Marker；
-- 自动执行 SBTD 分类和 Route；
+- 启用自动 SBTD 分类和 Route；
 - 自动生成并推进 Book Gate Plan；
 - 按场景激活对应 Skills；
 - 启用 SBTD 专用 Tool/Stage/Delivery Gate；
 - 维护 Stage、Tool Evidence、Validation 和 Report State；
-- 在 Compaction、Resume、Branch 后恢复状态。
+- 在 Compaction、Resume、Branch 后恢复持久字段，重新观测 Environment 后再派生控制状态。
 
 #### `/sbtd off`：Advisory Mode
 
@@ -526,6 +514,7 @@ Book Gate Enforcement: disabled (derived)
 |---|---|---|---|
 | `runtimeMode` | `enforced \| advisory` | Session / 用户命令 | 是 |
 | `policyProfile` | `strict \| relaxed` | Session / Policy | 是 |
+| `securityBaseline` | `local-guarded` 等独立安全基线标识 | Policy / 安全配置 | 是，独立于 Policy Profile |
 | `environmentMode` | `managed \| needs-onboard \| degraded \| blocked` | Preflight / Environment Management | 是，连同观测时间 |
 | `effectiveControlState` | `active \| advisory \| preflight-only \| blocked` | 状态选择器 | 否，只派生 |
 | `gateState` | `planned \| running \| passed \| blocked \| not-required` | Workflow / Gate Engine | 是 |
@@ -541,7 +530,7 @@ Book Gate Enforcement: disabled (derived)
 | `environmentAlignment` | `verified \| unverified \| mismatch \| not-needed` | Evidence Envelope | 是 |
 | `evidencePublication` | `local-only \| published \| blocked \| not-configured \| not-needed` | Evidence Envelope | 是 |
 
-Book Gate 的 `gateState` 与该 Gate 的 `reviewerStatus` 必须分字段记录。例如 `gateState=running, reviewerStatus=needs-design-change`；只有 reviewer 达到该 Gate 的通过状态后，`gateState` 才能变为 `passed`。`checkRequirement` 描述是否应执行，`validationStatus` 描述本轮执行结论；`not-applicable` 不得写入 `validationStatus`，`not-needed` 不得写入 `checkRequirement`。
+Book Gate 的 `gateState` 与该 Gate 的 `reviewerStatus` 必须分字段记录；每个 Gate 使用 11.2 定义的完整 Reviewer 状态域和恢复映射。例如 `gateState=running, reviewerStatus=needs-design-change`；只有 reviewer 达到该 Gate 的通过状态后，`gateState` 才能变为 `passed`。`checkRequirement` 描述是否应执行，`validationStatus` 描述本轮执行结论；`not-applicable` 不得写入 `validationStatus`，`not-needed` 不得写入 `checkRequirement`。
 
 Tool Evidence 不是单一进度状态。每个工具独立记录：
 
@@ -570,7 +559,7 @@ Effective Control State 只由 Runtime Mode 和当前 Environment Mode 派生：
 | `enforced` | `needs-onboard` | `preflight-only` | 仅 Help、Doctor、Plan 和 Always-on 安全边界 |
 | `enforced` | `blocked` | `blocked` | 阻断受影响 Route/Stage，并提供恢复路径 |
 
-命令只能修改自己拥有的维度：`/sbtd on|off` 只改 `runtimeMode`，`/sbtd strict|relaxed` 只改 `policyProfile`，Preflight 只观测 `environmentMode`。`effectiveControlState` 不接受命令写入。四种 Runtime Mode × Policy Profile 组合都必须可持久化；Compaction/Resume 后重新观测 Environment，再重算 Effective Control State。
+命令只能修改自己拥有的维度：`/sbtd on|off` 在确定性 Preflight 成功后原子更新 `runtimeMode` 与当前 Environment 观测，`/sbtd strict|relaxed` 只改 `policyProfile`，Route 或 Profile 改变也必须先重新观测 Environment，再写入请求字段并派生新的 `effectiveControlState`。`effectiveControlState` 不接受命令写入。四种 Runtime Mode × Policy Profile 组合都必须可持久化；Compaction/Resume 后重新观测 Environment，再重算 Effective Control State。
 
 ---
 
@@ -585,7 +574,7 @@ Effective Control State 只由 Runtime Mode 和当前 Environment Mode 派生：
 ┌──────────────────────────▼────────────────────────────┐
 │                       KPi Core                        │
 │ Workflow · Rule · Policy · Validation · Context       │
-│ Provider · Session · Reporting · Kit/Skill Registry   │
+│ Provider Coordination · Session · Reporting · Kit/Skill Registry │
 └──────────┬───────────────┬──────────────┬─────────────┘
            │               │              │
 ┌──────────▼───────┐ ┌─────▼──────┐ ┌────▼─────────────┐
@@ -595,7 +584,7 @@ Effective Control State 只由 Runtime Mode 和当前 Environment Mode 派生：
            │               │              │
 ┌──────────▼───────────────▼──────────────▼─────────────┐
 │                  Runtime Adapter Layer                 │
-│       runtime-omp（P0）       runtime-pi（P3）          │
+│ OMP Plugin Host（P0 RuntimePort v0）  runtime-pi（P3） │
 └──────────┬──────────────────────────────┬──────────────┘
            │                              │
 ┌──────────▼──────────┐         ┌─────────▼────────────┐
@@ -616,7 +605,7 @@ Effective Control State 只由 Runtime Mode 和当前 Environment Mode 派生：
 | Validation | 命令选择、报告真实性、Evidence 状态 | 实现代码 |
 | Kit | Skills、Rules、Prompts、Workflows、Schemas、Assets 的发行单元 | Runtime 内核 |
 | Command Registry | 命令元数据、解析、Help、错误提示、文档与补全事实源 | Agent 业务推理 |
-| Provider Gateway | 模型、认证、角色、Fallback、能力矩阵 | 业务工作流 |
+| Provider Coordination | Provider Profile、Secret Reference、Role/Capability Requirement、Availability、Fallback Policy 与传给 Runtime 的 Selection Result | 模型执行、认证、凭据刷新、Streaming Transport |
 
 ### 9.2 P0 的职责分层：项目事实与 OMP 适配分离
 
@@ -948,6 +937,12 @@ digest=<sha256>
 - `.omp/AGENTS.md` 的 Managed Block 必须验证 `@../AGENTS.md`；
 - Project `.gitignore` 继续使用逐行幂等策略。
 
+#### `AcceptedSkipV1` 与 `merge-required` 解析
+
+`AcceptedSkipV1` 由 Environment Management / Provenance Inventory 所有并以版本化记录保存：`schemaVersion`、`recordId`、asset-or-capability key、`scope`、selected Profile、Kit major、确认 actor/time、expiry、`status: active|revoked|expired`、reason、evidence reference、provenance/version metadata。Environment observer 只接受 active、未过期、且 asset/capability、scope、Profile 与 Kit major 全部精确匹配的记录；Route-required capability 永远不能 accepted-skip。创建、撤销和过期处理均为 Plan-first 的显式版本化操作，Doctor、Report 和 Evidence Envelope 必须显示记录、有效性、来源、owner 与 repair path。
+
+`managedAssetState=merge-required` 时不覆盖未知或漂移内容。Plan 只提供三种安全动作：保留并阻断；用户手工合并后重新 Plan；仅在已记录 prior digest 授权时执行已知模板迁移。Apply 必须在写入前立即重新校验 provenance/digest，按适用情况写入或保留 backup，记录 operation id、选定动作与 residuals，并以 `exact|merge-required|blocked` 终结。重复已完成操作只报告原终结结果；不同或陈旧 digest 必须重新 Plan，Rollback 也只能恢复精确已知 prior block 并先重验当前 digest。
+
 ### 9.11 上游更新与用户环境同步
 
 维护者同步流程：
@@ -1091,13 +1086,13 @@ intake
   → book-gate-plan
   → before-dev
   → implement
-  → targeted-validate
-  → full-validate
-  → runtime/e2e-validate
+  → focused-validate
+  → affected-scope-validate
+  → planned-final-full-validate
+  → formal-artifact-freshness-sanitization-gate
   → review
   → release-gate
   → report
-  → lessons-record
   → completed | blocked
 ```
 
@@ -1189,6 +1184,16 @@ not-required
 | Refactoring Review | 修改任何既有生产代码 | `proceed` | 首次实现编辑前 |
 | Release Readiness Review | API/Auth/Billing/Notification/Job/Queue/Data Pipeline/Integration/Deployment 等生产路径 | `ready` | 所有测试 Gate 与项目验证后 |
 
+每个 Reviewer 状态域与恢复路径固定如下；非通过状态保持 `gateState=running`，`blocked` 映射为 `gateState=blocked`，不得以通用字符串替代：
+
+| Gate | `reviewerStatus` 枚举 | 通过与恢复 |
+|---|---|---|
+| DDD Boundary Review | `confirmed \| needs-clarification \| blocked` | `needs-clarification` 回到逐问题澄清并复审；`confirmed` 才可继续 |
+| DDIA Data Design Review | `confirmed \| needs-design-change \| blocked` | `needs-design-change` 修正数据设计、迁移/恢复和验证后复审 |
+| Legacy Change Safety Review | `characterized \| needs-safety-net \| seam-required \| blocked` | `needs-safety-net` 先建立安全网；`seam-required` 仅允许最小 safety seam，再回到 characterization |
+| Refactoring Review | `proceed \| refactor-first \| blocked` | `refactor-first` 先完成最小行为保持重构并复审；legacy seam 回路仅可用 `safety-seam-only` |
+| Release Readiness Review | `ready \| needs-mitigation \| blocked` | `needs-mitigation` 完成缓解和所需验证后复审；必需验证缺失为 `blocked` |
+
 ### 11.3 受控 Legacy/Refactoring 回路
 
 ```text
@@ -1260,6 +1265,8 @@ Onboard `init/reset` 例外：
 - Permission、Error、Status；
 - 外部 Integration 的可观察结果；
 - 用户可见 Bug Fix。
+
+`checkRequirement=not-applicable` 只适用于有客观 predicate 证明为内部、非用户可见的检查；它不是 UI、API、CLI、导出、通知、权限、错误、状态变化或外部 Integration 行为的 BDD 豁免，也不能作为交付完成的替代路径。
 
 ### 13.2 行为 SOT
 
@@ -1383,9 +1390,8 @@ Onboard `init/reset` 例外：
 ```text
 Focused Validation
   → Affected Scope
-  → Planned Full Validation
+  → Planned Final Full Validation
   → Formal Report Artifact Gate
-  → Final Full Rerun
 ```
 
 ### 15.2 正式报告要求
@@ -1628,6 +1634,10 @@ promote-external-skills-stable
 - 已有全局 Trellis CLI 下的项目初始化；
 - Bootstrap 检测；
 - 适用的 Playwright/React Bits 决策。
+
+#### P1 受限卸载、更新与恢复
+
+P1 的 `kpi onboard uninstall` 与更新操作以 Provenance Inventory 为唯一选择依据，支持显式 `project|user|runtime|all-managed` scope。每次操作先输出 dry-run Plan，用户确认后只处理匹配的 KPi Managed Assets；drifted、unknown、shared、out-of-scope 或删除失败资产均保留并按项目列入 residuals。每个目标按 scope、source revision、expected/observed digest 与 operation id 幂等：重复已完成操作返回既有终结结果，陈旧 digest 必须重新 Plan。已知 Block 的替换默认保留 backup；破坏性 purge 使用独立命令/flag 和再次确认，永不扩大 ownership。结果必须显示 changed、retained、backup、residuals 与 repair path；用户必须新建 Session 或完成 Reload 后，才能声称 KPi context 已移除。
 
 ### 18.3 目标平台兼容
 
@@ -1963,89 +1973,52 @@ P0/P1 必须维护以下测试矩阵：
 
 ---
 
-## 19. Provider 与认证
+## 19. Provider Coordination 与认证
 
-### 19.1 总体策略
+### 19.1 KPi 与 Runtime 的边界
 
-Provider 能力分为三层：
+KPi 的 **Provider Coordination** 仅负责声明式选择输入和不敏感结果：
 
 ```text
-ProviderAdapter
-CredentialSource
-RuntimeAdapter
+ProviderProfile
+SecretReference
+RoleCapabilityRequirement
+Availability
+FallbackPolicy
+RuntimeSelectionResult
 ```
 
-```ts
-type AuthMode =
-  | "api-key"
-  | "runtime-oauth"
-  | "subscription-cli-delegation"
-  | "gateway"
-  | "local"
-  | "none";
-```
+KPi 不实现 Provider Adapter、Credential Source、认证刷新或模型 Transport。选定 Runtime 始终拥有模型执行、认证、凭据刷新、Streaming Transport 和实际凭据访问。Provider Coordination 绝不接收或读取凭据值。
 
-P0/P1 优先继承 OMP Provider 能力；P2 建立独立 Provider Gateway。
+| 阶段 | Provider Coordination 的承诺 | Runtime 的承诺 |
+|---|---|---|
+| P0 | 从 OMP Doctor/Report 观察不敏感 Role、availability 与 fallback 状态 | 管理 Provider、认证与执行 |
+| P1 | 统一展示 Profile、Secret Reference、Role、availability 与 fallback；`kpi provider login` 只启动用户控制的 Runtime/官方 CLI 登录 | 管理 BYOK、OAuth/Plan、登录与执行 |
+| P2 | 提供 Runtime-neutral Profile、Requirement、Availability、Fallback 与 Selection Result contract | 通过正式 `runtime-omp` Adapter 执行选择结果 |
+| P3 | 仅在全部外部 CLI Session Adapter Gate 通过后增加可选 Adapter | 保留实际认证、凭据与模型执行所有权 |
 
-### 19.2 支持矩阵
+### 19.2 Provider/渠道支持矩阵
 
-| Provider/渠道 | P0/P1 实现 | P2/P3 目标 | 安全边界 |
+| Provider/渠道 | P0/P1 | P2/P3 | 安全边界 |
 |---|---|---|---|
-| OpenAI BYOK | 由 OMP Provider/自定义 Provider 管理 | 原生 OpenAI Adapter | 仅引用 Key，不写项目 |
-| Anthropic BYOK | 由 OMP 管理 | 原生 Anthropic Adapter | 同上 |
-| OpenAI-compatible | OMP `models.yml` | 通用 Adapter | Base URL Allow/Approval |
-| Anthropic-compatible | OMP/自定义配置 | 通用 Adapter | 兼容性探测 |
-| DeepSeek BYOK | OpenAI/Anthropic-compatible | 原生 Preset + 动态 Model Catalog | 不硬编码过时 Model ID |
-| Codex 订阅 | OMP Runtime 管理或官方 `codex` CLI 委托 | `runtime-codex-cli` 可选 Adapter | KPi 不提取 ChatGPT/Codex Token |
-| Claude Code 订阅 | 仅用户控制的本地 Runtime 委托/实验能力 | 经法律与条款审核后决定 | 不嵌入 Claude.ai Login，不代理订阅凭据 |
-| Kimi Code 订阅 | OMP Plan 或官方 `kimi` CLI/订阅 API Key | `runtime-kimi-cli`/Kimi Adapter | 使用官方方式，不抓取客户端存储 |
-| Local Models | OMP Local/OpenAI-compatible | 原生 Local Adapter | Key 可选 |
-| Enterprise Gateway | OMP Custom Provider | 原生 Gateway Adapter | 审计、Allowlist、TLS |
+| OpenAI BYOK | OMP 或选定 Runtime 管理 Key 与请求；KPi 只观察 Profile/Role/availability | Coordination 描述 Profile、Secret Reference、Capability/Fallback Requirement 与 Selection Result | KPi 不读取、持久化或输出 Key |
+| Anthropic BYOK | 同上 | 同上 | 同上 |
+| OpenAI-compatible / Anthropic-compatible | 选定 Runtime 配置 endpoint 与认证 | Coordination 描述 endpoint 的 capability/fallback requirement；Runtime 执行 | Allow/approval 与兼容性证据由 Runtime/部署边界执行 |
+| DeepSeek BYOK | Runtime 兼容 Provider | Coordination 记录动态 Model Catalog/Capability 选择；Runtime 请求 | 不永久硬编码历史 Model ID |
+| Codex 订阅 | P0 为 Runtime-managed；P1 只启动用户控制的官方 `codex` 登录并显示不敏感状态 | P3 可选 `runtime-codex-cli` Session Adapter，受全部外部 CLI Gate 约束 | 不提取 ChatGPT/Codex Token |
+| Claude Code 订阅 | P1 只启动用户控制的官方 `claude` 登录并显示不敏感状态 | P3 外部 CLI Adapter 必须先通过版本、区域、数据路径与 Terms Gate | 不嵌入 Claude.ai 登录，不代理订阅凭据 |
+| Kimi Code 订阅 | Runtime-managed 或用户控制的官方 `kimi` 登录/API Key | P3 可选 `runtime-kimi-cli` Session Adapter | 不抓取客户端存储或隐藏 Token |
+| Local Models / Enterprise Runtime | Runtime 管理连接和认证 | Coordination 管理 Profile/Requirement/Selection；Runtime 管理执行 | TLS、审计与 Allowlist 属于 Runtime/部署边界 |
 
-### 19.3 Codex
+### 19.3 用户控制的官方登录与外部 CLI Adapter
 
-支持方式：
+`kpi provider login` 的 P1 行为仅为启动用户选择的 Runtime 或官方 CLI 登录流程，再读取可公开的不敏感状态；它不得代理浏览器登录、读取其他 CLI 的认证文件、导出 OAuth/Refresh Token，或创建 Coding Session Adapter。
 
-1. 用户在官方 Codex CLI 中完成 `Sign in with ChatGPT`；
-2. KPi 通过外部 Runtime 委托或 OMP 已管理的 Session 使用；
-3. 或用户提供 OpenAI API Key；
-4. KPi 不读取 Codex 本地认证文件，不导出 OAuth Token，不模拟登录。
+- Codex：用户在官方 `codex` CLI 完成 `Sign in with ChatGPT`，或向选定 Runtime 提供 API Key；P3 才可在 Gate 通过后委托官方 CLI。
+- Claude Code：P1 只可启动用户控制的官方 `claude` CLI 登录。P3 外部 CLI Coding Session Adapter 必须有精确 CLI 版本、区域、数据路径和当前商业 Terms 的记录化审核；缺失、过期或否决时保持禁用。
+- Kimi：P1 仅可启动用户控制的官方 `kimi` 登录或引导 Runtime 采用用户提供的 Key；P3 Adapter 同样受 Gate 约束。
 
-### 19.4 Claude Code
-
-KPi 必须区分：
-
-- **Claude API/Console/Bedrock/Vertex/Foundry**：可作为正式 BYOK/企业 Provider；
-- **Claude Code Subscription**：只允许用户控制的官方 CLI 委托，不在 KPi 内嵌 Claude.ai OAuth，也不把 Pro/Max 登录凭据转发给第三方服务。
-
-商业发行前必须完成 Anthropic 当前条款和 OAuth 政策审核。未通过时：
-
-- 功能标记为 `experimental` 或禁用；
-- 不在产品文案承诺“使用 Claude 订阅额度”；
-- 推荐使用 API Key 或受支持的企业云 Provider。
-
-### 19.5 Kimi Code
-
-支持：
-
-- 官方 `kimi` CLI 已登录 Session 的本地委托；
-- 官方订阅/会员提供的第三方 API Key；
-- OpenAI-compatible/Anthropic-compatible Endpoint；
-- KPi 不读取 Kimi 客户端隐藏 Token；
-- CLI 包名、登录方式和模型目录通过 Doctor 动态检测，避免绑定旧版实现。
-
-### 19.6 DeepSeek
-
-支持：
-
-- OpenAI-compatible Endpoint；
-- Anthropic-compatible Endpoint；
-- BYOK；
-- Model Catalog 动态刷新；
-- 配置以 Model Capability 为准，不将历史 Model ID 永久写死；
-- Reasoning、Tool Call、Context Window、JSON/Structured Output 能力经实际探测记录。
-
-### 19.7 Model Roles
+### 19.4 Model Roles、Fallback 与 Capability
 
 ```text
 default
@@ -2057,37 +2030,22 @@ smol
 slow
 ```
 
-要求：
+- Provider Coordination 可按 Role 描述 Model Capability Requirement、Fallback Policy 和项目路径级覆盖；
+- Runtime 将 `RuntimeSelectionResult` 映射为实际 Provider/Model，并执行 Capability Gate；
+- Runtime 发生回退时，KPi Report 记录 Primary、Fallback、原因及可用的 Token/Cost，不记录凭据；
+- Provider 不可用时不得静默选择能力不等价的模型。
 
-- Role 可映射不同 Provider/Model；
-- 支持 Fallback Chain；
-- 支持项目路径级覆盖；
-- 支持 Capability Gate；
-- 失败回退必须记录 Primary、Fallback、原因、Token/Cost（可用时）；
-- Provider 不可用不能静默换成能力不等价的模型。
+### 19.5 凭据边界
 
-### 19.8 凭据管理
-
-允许：
-
-- 环境变量引用；
-- OS Keychain/Secret Service；
-- 用户配置的 Credential Helper；
-- 企业 Vault/Gateway；
-- Runtime 自己管理的 OAuth Session。
-
-禁止：
+Runtime 或用户可使用环境变量引用、OS Keychain/Secret Service、Credential Helper、企业 Vault 或 Runtime 管理的 OAuth Session。KPi 只处理 Secret Reference，禁止：
 
 - 明文写入仓库；
-- 写入 AGENTS、Skill、Report、Screenshot；
+- 写入 AGENTS、Skill、Report 或 Screenshot；
 - 读取浏览器 Cookie；
 - 复制 Refresh Token；
 - 逆向订阅协议；
-- 从其他 CLI 隐藏文件中提取凭据；
+- 从其他 CLI 隐藏文件提取凭据；
 - 在日志中输出完整 Key。
-
----
-
 ## 20. Rule Engine 与 Policy Engine
 
 ### 20.1 Rule Action
@@ -2117,11 +2075,14 @@ type RuleAction =
 | `secret-read-guard` | 读取 `.env/*.key/*.pem` 等 | block-tool |
 | `install-requires-approval` | 依赖/全局工具安装未确认 | block-tool |
 
-### 20.3 默认 Policy Profile
+### 20.3 默认安全基线与 Policy Profile
+
+`policyProfile` 只能是 `strict|relaxed`；`local-guarded` 是独立的安全基线配置，不是 Profile 值：
 
 ```yaml
 policy:
-  profile: local-guarded
+  profile: strict
+  securityBaseline: local-guarded
 
   filesystem:
     read: ["<project-root>"]
@@ -2159,10 +2120,24 @@ policy:
 ### 21.1 SBTD Session State
 
 ```ts
+type GateReviewerStatus =
+  | "confirmed"
+  | "needs-clarification"
+  | "needs-design-change"
+  | "characterized"
+  | "needs-safety-net"
+  | "seam-required"
+  | "proceed"
+  | "refactor-first"
+  | "ready"
+  | "needs-mitigation"
+  | "blocked";
+
 interface SBTDSessionStateV1 {
   stateVersion: 1;
   runtimeMode: "enforced" | "advisory";
   policyProfile: "strict" | "relaxed";
+  securityBaseline: "local-guarded";
   environmentMode: "managed" | "needs-onboard" | "degraded" | "blocked";
   environmentObservedAt: string;
   route: WorkflowRouteId | "auto";
@@ -2171,7 +2146,7 @@ interface SBTDSessionStateV1 {
   activeSkills: string[];
   bookGates: Record<string, {
     gateState: "planned" | "running" | "passed" | "blocked" | "not-required";
-    reviewerStatus?: string;
+    reviewerStatus?: GateReviewerStatus;
   }>;
   toolEvidence: Record<string, ToolEvidenceState>;
   validation: ValidationState;
@@ -2201,18 +2176,16 @@ interface SBTDSessionStateV1 {
 
 ### 21.3 Compaction/Resume
 
-必须保留：
+Compaction 必须保留并在 Resume 时校验：
 
-- SBTD Enabled/Mode；
-- Current Stage/Route；
-- Classification；
-- Book Gate States；
-- Tool Evidence；
-- Validation/Evidence；
-- Pending Approval；
-- Caveman 自动状态；
-- Lessons 是否已读取；
-- 首次提示是否已发送。
+- `stateVersion`、`runtimeMode`、`policyProfile` 与独立的 `securityBaseline`；
+- 当前 `environmentMode`、观测时间、输入来源与 accepted-skip 依据；
+- Current Stage/Route、Classification 与 Active Skills；
+- Book Gate State/Reviewer Status、Tool Evidence、Validation/Evidence；
+- Provider Coordination 的不敏感 Selection Result；
+- Pending Approval、Caveman 自动状态、Lessons 读取状态与首次提示状态。
+
+Resume 先恢复 Session-owned 字段，再重新观测 Environment Mode 并派生 `effectiveControlState`；不得恢复或生成 `enabled`、裸 `mode` 或过期的 Effective Control State。
 
 ### 21.4 最终报告
 
@@ -2275,10 +2248,9 @@ Suggested Commit / Next Action
 | FR-PROVIDER-002 | `kpi provider doctor` 与凭据引用 | P1 |
 | FR-KIT-001 | SBTD Kit Manifest 与安装/Doctor | P1 |
 | FR-REPORT-001 | Session/Report JSON 与 Markdown 导出 | P1 |
-| FR-CORE-001 | Runtime 无关 Workflow Engine | P2 |
+| FR-PROVIDER-003 | Runtime-neutral Provider Coordination（Profile、Secret Reference、Requirement、Availability、Fallback 与 Selection Result） | P2 |
 | FR-CORE-002 | Runtime 无关 Rule/Policy/Validation/Context | P2 |
 | FR-AGENTS-009 | Runtime-specific AGENTS Renderer、Section Mapping 与 Conformance | P2 |
-| FR-PROVIDER-003 | 独立 Provider Gateway 与 BYOK Adapter | P2 |
 | FR-ONBOARD-003 | Python → TypeScript 契约等价迁移 | P2 |
 | FR-KB-001 | Knowledge P1.1 标准适配 | P2 |
 | FR-RUNTIME-002 | `runtime-omp` 标准 Adapter | P2 |
@@ -2341,11 +2313,8 @@ Suggested Commit / Next Action
 - Plugin 包含可校验的固定 Kit Revision，不在启用时自动拉取 `main`；
 - `/sbtd help`、`/sbtd help <command>` 和所有已注册命令说明来自同一 Command Registry；
 - Help 不调用模型、不创建 Agent Turn、不修改 Session，并包含用途、Usage、示例、写入和确认标记；
-- `/sbtd on/off/status/doctor/report` 可用；
-- `/sbtd onboard status/plan/init/reset/init-projects` 与 `/sbtd setup` 可用；
+- `/sbtd on` 先做只读 Preflight；可确定时原子提交 `runtimeMode=enforced` 与当前 Environment 观测，再派生 Effective Control State；evaluator 失败保留命令前状态并给出 repair path；
 - `/sbtd onboard plan` 不写文件，Apply 类命令显示完整计划并获得确认；
-- `/sbtd on` 先做只读 Preflight，并按统一优先级返回唯一 `environmentMode`；
-- `/sbtd on` 只设置 `runtimeMode=enforced`；仅 `effectiveControlState=active` 时执行自动分类、Tool Evidence 和 Gate；
 - `/sbtd off` 只设置 `runtimeMode=advisory` 并派生 `effectiveControlState=advisory`，保留 Policy Profile、项目事实和 Always-on 安全；
 - OMP Global AGENTS 严格写入 `$PI_CODING_AGENT_DIR/AGENTS.md`，默认 `~/.omp/agent/AGENTS.md`；
 - 根 Project AGENTS 严格写入 `<project-root>/AGENTS.md`；
@@ -2367,6 +2336,7 @@ Suggested Commit / Next Action
 - GitNexus 必须同时验证 Session MCP、项目索引、Branch 与 Freshness；
 - Provider 凭据不被 KPi 读取或记录；
 - 至少覆盖小修改、可见 Feature、Bug、数据变更、生产路径变更五类端到端样例。
+- P0 价值 Gate 同时满足：确定性 Contract Gate 通过；至少 20 个代表性任务在同一 Runtime/Model 基线下配对执行；盲评正确性不低于基线；严重工作流遗漏至少减少 30%；Mandatory Gate recall 为 100%；不必要的重 Route 激活不超过 5%。
 
 ### 24.2 P1 验收
 
@@ -2383,13 +2353,12 @@ Suggested Commit / Next Action
 
 ### 24.3 P2 验收
 
-- Workflow/Rule/Policy/Validation/Context/Provider 不依赖 OMP；
+- Workflow/Rule/Policy/Validation/Context/Provider Coordination 不依赖 OMP；Runtime Contract v1 已冻结，正式 `runtime-omp` Adapter 已交付并通过迁移/兼容性 Fixture；
 - Kit 成为机器规则与 AGENTS 模板的单一来源；
 - Mode-aware AGENTS 在 `enforced/advisory` 两种 Runtime Mode 下通过一致性测试；
-- OMP 仅通过 `runtime-omp` Adapter 接入；
+- Runtime-neutral Provider Coordination 可为 OpenAI、Anthropic、Compatible 与 DeepSeek 描述 BYOK Profile、Secret Reference、Capability/Fallback Requirement 与 Selection Result；实际认证和请求仍由 Runtime 执行；
 - TypeScript Onboard 对 Golden Fixture 与 Python 输出达到契约等价；
 - Catalog、External Skill Transaction、Legacy Migration、多项目状态测试通过；
-- 独立 BYOK Gateway 支持 OpenAI、Anthropic、OpenAI-compatible、Anthropic-compatible、DeepSeek；
 - Knowledge P1.1 状态和 Artifact 可进入统一报告；
 - Core 可在 Headless 单元测试中完整模拟工作流。
 
@@ -2455,29 +2424,19 @@ Suggested Commit / Next Action
 9. 已形成 ADR 并获得产品/工程确认。
 
 否则继续使用 Adapter/Plugin。
+## 28. 已关闭的边界决策
 
----
-
-## 28. 开放决策
-
-已关闭的状态决策：
-
-- Policy Profile 单调：`relaxed` 不提升 Optional Checks，`strict` 只提升已声明 Optional Checks；两者都不能降低 Route-required Checks。
-- Runtime capability 使用 `capabilityStatus=native|adapter|degraded|unsupported`；Optional 能力可按契约降级，缺失 Required 能力必须阻断依赖 Route。
-
-仍开放的非状态决策：
-
-1. KPi CLI 默认发行是否捆绑 OMP，还是要求外部安装。
-2. P0 Plugin 使用 OMP Marketplace、npm 还是 Git 安装。
-3. 是否在 P1 引入 `kpi provider login`，或仅做 Runtime Delegation。
-4. Claude Code Subscription 委托在商业发行中的法律边界。
-5. P2 TypeScript Onboard 是否保留 Python Fallback。
-6. `640-skills` 是 Git Submodule、Package、Vendored Snapshot 还是远端 Kit。
-7. Evidence P2（Store/PR Check）放入 KPi v0.3 还是独立产品。
-8. KPi 的长期许可证与 bundled/external Skill 的 License/NOTICE 传播策略。
-9. P2 以后是否需要提供完全不安装 Global AGENTS 的 Runtime-native 模式，以及其隔离、兼容和迁移边界。
-10. P2 以后是否允许结构化 `.kpi/project.yaml` 辅助生成根 Project AGENTS，但不得削弱根 AGENTS 作为跨 Agent 可读事实层。
-11. Monorepo 是否在 P2 提供显式 Workspace Adapter 生成命令，而不是 P0 自动创建深层 `.omp/AGENTS.md`。
+1. P1 默认在 KPi 私有/package scope 管理固定兼容的 OMP Runtime；高级用户可显式选择外部 Runtime，Doctor 必须可见地拒绝或降级不兼容组合（D-009）。
+2. P0 Plugin 以不可变、可锁定的 npm release 为正式产物；Marketplace 只提供解析到精确 npm release 的发现/兼容元数据，Git 仅用于开发或明确 prerelease（D-010）。
+3. P1 保留 `kpi provider login`，但只启动用户控制的 Runtime/官方 CLI 登录并观察不敏感状态；P1 不运行外部 CLI Coding Session Adapter（D-007）。
+4. Claude 订阅的 P3 外部 CLI Adapter 必须以精确 CLI 版本、区域、数据路径和当前商业 Terms 的记录化审核为 Release Gate；缺失、过期或否决均保持禁用（D-012）。
+5. TypeScript Onboard 在 Golden Fixture、differential、rollback 与跨平台验收通过后才成为默认；Python 保留到首个 P3 compatibility release 作为显式 `--engine python` fallback，绝不在 TS 写操作后自动 fallback（D-013）。
+6. `640-skills` 只从 resolved full SHA 同步，用户消费不可变 npm Kit manifest；不使用 Floating Main、Git submodule 要求或未审阅 remote fetch（D-014）。
+7. 云端 Evidence Store/PR Check 是独立的 post-v0.3 里程碑，P0–P3 只交付 local Evidence Envelope 与 export interface（D-015）。
+8. KPi 采用 `GPL-3.0-only`；每个 Plugin、Kit、CLI release 以 SBOM 与 THIRD_PARTY_NOTICES 验证实际内容（D-017、D-018）。
+9. P2 可选 Runtime-native profile 只替换 KPi 全局/runtime 指令，根 Project AGENTS 与深层项目规则仍为事实源；迁移和回滚均需 Plan/confirmation（D-019）。
+10. P2 的 `.kpi/project.yaml` 只生成根 `AGENTS.md` 的专用 KPi Managed Project Facts Block；Workspace Adapter 仅可由用户选择的 P2 plan-first 命令生成（D-020、D-021）。
+11. 命令、Environment Mode、Rule mutability 与 P0 value gate 分别按 D-022、D-023、D-024、D-003 的确定性契约执行，不再作为开放决策。
 
 ---
 
