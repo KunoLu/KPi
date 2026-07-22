@@ -2,7 +2,7 @@
 
 > **文档版本**：0.7-draft  
 > **文档日期**：2026-07-21  
-> **对应 PRD**：`PRD_v0.7.md`  
+> **对应 PRD**：`PRD.md`  
 > **路线原则**：**OMP-first → KPi CLI → KPi Core → 双 Runtime → 必要时受控 Fork**  
 > **SBTD 基线**：`KunoLu/640-skills main @ 340f9dd4dc7a92e8b91c31e111de9a8de06cef36`  
 > **说明**：P0～P3 是按依赖顺序排列的实施优先级，不是并行开发泳道，也不是缺陷等级。  
@@ -205,17 +205,17 @@ P0-B 退出标准：
 
 验收：
 
-- `/sbtd help` 在所有环境状态和 Runtime Mode 下可用；
+- `/sbtd help` 在所有 `environmentMode` 和 `runtimeMode` 下可用；
 - `/sbtd help <nested command>` 支持如 `onboard init`；
 - Help 不调用模型、不创建 Agent Turn、不修改 Session；
-- `/sbtd on` 创建/恢复 Session State 并执行只读 Preflight；
-- 未完成 normal Onboard 时返回 `needs-onboard` 或 `degraded`，不自动安装；
+- `/sbtd on` 只设置 `runtimeMode=enforced`，随后执行只读 Preflight 并派生 Effective Control State；
+- 未完成 normal Onboard 且无 accepted-skip 时返回 `environmentMode=needs-onboard`，不自动安装；
 - `/sbtd onboard plan` 零写入；
 - Apply 类命令显示计划并获得确认；
-- `/sbtd off` 切为 `advisory`，停止自动分类、Book Gates、自动 Skill 路由和 SBTD Delivery Gate；不删除 AGENTS、Skills、Tools 或历史报告；
-- `/sbtd status` 显示 Environment Mode、Runtime Mode、Stage、Route、Book Gates、三层 AGENTS、Tool Evidence、Validation、Provider；
-- `strict/relaxed` 不得关闭 Hard Gates；
-- 命令在 Resume 后保持一致。
+- `/sbtd off` 只设置 `runtimeMode=advisory`，保留 Policy Profile、AGENTS、Skills、Tools 和历史报告；
+- `/sbtd status` 按字段名显示 Environment Mode、Runtime Mode、Policy Profile、Effective Control State、Stage、Route、Book Gates、三层 AGENTS、Tool Evidence、Validation Status 和 Provider；
+- `/sbtd strict|relaxed` 只修改 `policyProfile`，不得修改 Runtime Mode 或关闭 Route-required Checks；
+- 命令在 Resume 后保持一致，Environment 重新观测，Effective Control State 重新派生。
 
 ### P0-E2A：首次使用与 Onboard UX
 
@@ -245,10 +245,11 @@ OMP Provider/Login 已配置
 
 验收：
 
-- Fresh OMP + Plugin 可稳定进入 `needs-onboard`；
-- 完成 Onboard 并新建 Session 后进入 `managed`；
-- 无根 Project AGENTS 时进入 `degraded`；
-- 无 OMP Project Adapter 时进入 `needs-onboard` 或 `degraded`；
+- Fresh OMP + Plugin + 缺 normal Onboard 基线可稳定进入 `environmentMode=needs-onboard`；
+- 完成 Onboard 并新建 Session 后进入 `environmentMode=managed`；
+- 无根 Project AGENTS 且无 accepted-skip 时进入 `environmentMode=needs-onboard`；
+- 无 OMP Project Adapter 且无 accepted-skip 时进入 `environmentMode=needs-onboard`；
+- 仅 Optional 项目上下文缺失、accepted-skip 有效且 Route 不依赖缺口时进入 `environmentMode=degraded`；
 - 用户取消 Plan 后无任何环境变化；
 - 同一 Plan 重复执行保持现有 Onboard 幂等和回滚语义。
 
@@ -264,7 +265,7 @@ usage
 examples
 mutates
 requiresConfirmation
-availableWhen
+availableEnvironmentModes
 ```
 
 同一 Registry 生成：
@@ -302,17 +303,21 @@ session_shutdown
 message_update / ttsr_triggered（可用时）
 ```
 
-状态：
+持久化状态：
 
 ```text
-enabled
-mode: enforced | advisory
+stateVersion: 1
+runtimeMode: enforced | advisory
+policyProfile: strict | relaxed
 environmentMode: managed | needs-onboard | degraded | blocked
+environmentObservedAt
 stage
 classification
 route
 activeSkills
-bookGates
+bookGates:
+  gateState: planned | running | passed | blocked | not-required
+  reviewerStatus: <gate-specific>
 toolEvidence
 validation
 provider
@@ -327,12 +332,39 @@ agents:
   shadowedBy
 ```
 
+`effectiveControlState: active|advisory|preflight-only|blocked` 只派生，不持久化。禁止持久化 `enabled` 或裸 `mode`。
+
+统一状态字段必须与 PRD 8.9 完全一致：
+
+| 字段 | 合法值 | 所有者 | 持久化 |
+|---|---|---|---|
+| `runtimeMode` | `enforced \| advisory` | Session / 用户命令 | 是 |
+| `policyProfile` | `strict \| relaxed` | Session / Policy | 是 |
+| `environmentMode` | `managed \| needs-onboard \| degraded \| blocked` | Preflight / Environment Management | 是，连同观测时间 |
+| `effectiveControlState` | `active \| advisory \| preflight-only \| blocked` | 状态选择器 | 否，只派生 |
+| `gateState` | `planned \| running \| passed \| blocked \| not-required` | Workflow / Gate Engine | 是 |
+| `stageStatus` | `pending \| running \| passed \| blocked \| skipped \| not-needed` | Workflow Stage | 是 |
+| `checkRequirement` | `required \| optional \| not-applicable` | Route 分类 | 是 |
+| `validationStatus` | `passed \| failed \| blocked \| skipped \| not-needed` | Validation / Report | 是 |
+| `capabilityStatus` | `native \| adapter \| degraded \| unsupported` | Runtime Adapter Evidence | 是 |
+| `onboardProjectStatus` | `failed \| blocked \| needs-user \| bootstrap-required \| success \| skipped` | Environment Management | 是 |
+| `managedAssetState` | `absent \| exact \| drifted \| merge-required \| blocked` | Provenance Inventory | 是 |
+| `evidenceSource` | `developer-local \| ci \| knowledge-server \| not-needed` | Evidence Envelope | 是 |
+| `sourceRevision` | `exact \| dirty \| unknown \| not-needed` | Evidence Envelope | 是 |
+| `environmentAlignment` | `verified \| unverified \| mismatch \| not-needed` | Evidence Envelope | 是 |
+| `evidencePublication` | `local-only \| published \| blocked \| not-configured \| not-needed` | Evidence Envelope | 是 |
+
+Environment Mode 按 `blocked` → `needs-onboard` → `degraded` → `managed` 首个命中项唯一判定；`degraded` 要求当前 Route 的 Required 能力完整，并且每个 Optional 缺口都有匹配 scope、Profile、Kit major 且未过期的 accepted-skip provenance。
+
 验收：
 
-- Compaction 前后状态不重置；
+- Compaction 前后持久化字段不重置；
 - Branch/Switch 后按 Session 重建；
 - State 使用非 LLM Persistent Entry；
-- `enforced/advisory`、三层 AGENTS 状态和 Import/Shadow 信息可恢复；
+- 四种 Runtime Mode × Policy Profile 组合、八种 Runtime Mode × Environment Mode 派生组合都有 Fixture；
+- Resume 恢复 Runtime Mode 与 Policy Profile，重新观测 Environment Mode，并重算 Effective Control State；
+- Draft `enabled`/裸 `mode` 只允许无歧义兼容迁移；冲突字段、未知版本和非法枚举 fail closed；
+- 三层 AGENTS 状态和 Import/Shadow 信息可恢复；
 - 关键变化同时产生可读 UI 状态。
 
 ### P0-E4：SBTD 分类与 Route
@@ -387,8 +419,8 @@ review
 验收：
 
 - 每个开发任务输出 Gate Plan；
-- Gate State 符合 `planned/running/passed/blocked/not-required`；
-- Reviewer Status 与 Gate State 分离；
+- `gateState` 符合 `planned|running|passed|blocked|not-required`；
+- Gate-specific `reviewerStatus` 与 `gateState` 分字段持久化；
 - `grill-with-docs` 完成后强制 DDD 二次审核；
 - Legacy/Refactoring `safety-seam-only` 回路可执行；
 - Release Gate 必须位于验证之后；
@@ -436,7 +468,7 @@ review
 - Global/Root/Adapter/Deep AGENTS 发现；
 - Root Facts Context Bridge 与内容摘要去重；
 - OMP Provider Shadow/nearest-native Detection；
-- `enforced/advisory` Runtime Marker；
+- 包含 `runtime-mode`、`policy-profile`、`environment-mode`、`effective-control-state` 和 `state-version` 的 Runtime Marker；
 - 三类 Managed Block Parse/Replace；
 - 用户内容保留；
 - 旧已知模板迁移；
@@ -450,10 +482,10 @@ review
 - Adapter 必须导入根 AGENTS；
 - `.omp/AGENTS.md` 或其他 Provider Shadow 状态可见；
 - 更近 Workspace Adapter 被识别，不静默忽略根 Adapter；
-- `/sbtd on` 激活 Conditional SBTD；
-- `/sbtd off` 保留 Root Facts/Always-on；
+- `/sbtd on` 只设置 `runtimeMode=enforced`；仅 `effectiveControlState=active` 时激活 Conditional SBTD；
+- `/sbtd off` 设置 `runtimeMode=advisory` 并保留 Root Facts/Always-on；
 - 三类 Managed Block 外内容字节级保留；
-- Marker/Import 损坏时安全阻断。
+- Marker/Import 损坏时得到 `environmentMode=blocked` 并安全阻断。
 
 ### P0-E6B：Upstream AGENTS 三目标同步流水线
 
@@ -529,6 +561,7 @@ P0 规则：
 - Rule 在 Compaction 后仍有效；
 - Rule 不误匹配代码块、路径或示例文本；
 - 可通过项目配置禁用 Optional Rule，Hard Rule 不能静默关闭。
+- `policyProfile=relaxed` 不提升 Optional Checks，`policyProfile=strict` 只提升已声明 Optional Checks；两者均不能降低 Route-required Checks。
 
 ### P0-E8：Validation 与 Report
 
@@ -539,7 +572,7 @@ P0 规则：
 - RTK/Native Gate；
 - BDD Language/Trace；
 - Playwright/Maestro/API Formal Report；
-- Evidence 状态；
+- Evidence 的 `evidenceSource`、`sourceRevision`、`environmentAlignment` 与 `evidencePublication` 独立状态；
 - Final Full Rerun；
 - Structured JSON + Chinese Markdown Report。
 
@@ -550,7 +583,7 @@ P0 规则：
 - 同 stem 中文 Markdown；
 - E2E Mode 不升级；
 - Dirty Revision 不作为 PR Head 证据；
-- Failed/Blocked/Skipped/Not-needed 可区分。
+- `validationStatus=failed|blocked|skipped|not-needed` 可区分，并与 `checkRequirement` 分字段记录。
 
 ### P0-E9：Onboard Python Bridge
 
@@ -583,21 +616,23 @@ P0 原则：
 - 可定位 Plugin 内固定 Kit 的脚本，并可识别已安装 Global Skill 的兼容来源；
 - 可显示 Plugin/Kit Revision、Global/Root/OMP Adapter 三类路径、Import/Shadow 状态、Managed Digests 与 Plan；
 - 可处理 Python 不存在；
-- Exit Code 与 Trellis Aggregate Status 正确；
+- Exit Code 与逐项目 `onboardProjectStatus` 及其 aggregate precedence 正确；
 - 不吞掉 Rollback Path；
 - Project-only 不触碰 Global State。
 
 ### P0-E9A：Onboard/Runtime 工具生命周期
 
-实现并独立记录：
+按 PRD 8.9 的 Tool Evidence schema 独立记录：
 
 ```text
-installed
-configured
-callable
-project-ready
-current/fresh
-blocked reason
+installation: installed | missing | broken | not-needed
+configuration: configured | not-configured | not-needed
+callability: callable | unavailable | blocked | not-needed
+projectReadiness: ready | not-ready | blocked | not-needed
+freshness: current | stale | unknown | not-needed
+observedAt
+evidence
+blockedReason
 ```
 
 #### Plugin 安装与 Onboard 的写入矩阵
@@ -634,9 +669,9 @@ blocked reason
 
 验收：
 
-- 所有组合状态都有 Fixture；
+- Tool Evidence 五个 facet 的交叉组合都有 Fixture，任何 facet 都不能推出另一个 facet；
 - Project-only 不触碰 Global Tool/Skill/MCP；
-- Tool 不可用时只报告 `blocked/skipped/not-needed`，不伪造通过。
+- Tool 不可用时先记录对应 Tool Evidence facet；依赖它的 Check 再记录 `validationStatus=blocked|skipped|not-needed`，不得把两者合成一个状态。
 
 ### P0-E10：Provider Delegation
 
@@ -683,27 +718,33 @@ fallback used
 10. Session Resume/Compaction；
 11. Multi-project Onboard；
 12. Provider Unavailable/Fallback；
-13. Global + Root + OMP Adapter + Plugin Managed Mode；
-14. 缺 OMP Global AGENTS → `needs-onboard`；
-15. 缺 OMP Project Adapter → `needs-onboard/degraded`；
-16. 缺根 Project AGENTS → `degraded`；
-17. `/sbtd on` Enforced 与 `/sbtd off` Advisory 对照；
-18. `/sbtd off` 后 Root Facts/Always-on 仍有效；
-19. `.omp/AGENTS.md` 的 `@../AGENTS.md` 导入；
-20. 同层 Native Adapter 对根独立 AGENTS 的预期 Shadow；
-21. 更近 Workspace `.omp/AGENTS.md` nearest-native Detection；
-22. Managed Block 外用户内容保持；
-23. Old-template Digest 迁移与未知文件 `merge-required`；
-24. Upstream 新增 Unmapped Section 阻断 CI；
-25. Plugin Update → Plan → Reset → New Session 的三文件同步闭环；
-26. Plugin Install 环境 Diff 为零非 Plugin 写入；
-27. `/sbtd onboard plan` 零写入；
-28. Onboard 后未 Reload 时不得声称新 Skills/MCP callable；
-29. `/sbtd help` 全命令 Snapshot；
-30. `/sbtd help onboard init` 嵌套命令；
-31. Help 零模型调用、零 Session Mutation；
-32. Registry/Handler/Help/Docs 一致性；
-33. Unknown Command 的候选和 Help 提示。
+13. Global + Root + OMP Adapter + Plugin → `environmentMode=managed`；
+14. 缺 OMP Global AGENTS、无 accepted-skip → `environmentMode=needs-onboard`；
+15. 缺 OMP Project Adapter、无 accepted-skip → `environmentMode=needs-onboard`；
+16. 缺根 Project AGENTS、无 accepted-skip → `environmentMode=needs-onboard`；
+17. 仅 Optional 上下文缺失、accepted-skip 有效且 Route 不依赖缺口 → `environmentMode=degraded`；
+18. `/sbtd on` 与 `/sbtd off` 只改变 `runtimeMode`；
+19. `/sbtd strict` 与 `/sbtd relaxed` 只改变 `policyProfile`；
+20. Runtime Mode × Policy Profile 四种持久化/Resume 组合；
+21. Runtime Mode × Environment Mode 八种 `effectiveControlState` 派生组合；
+22. Route 变化使原 `degraded` 缺口变成 Required → `environmentMode=blocked`；
+23. accepted-skip 过期或 scope/Profile/Kit major 不匹配 → `environmentMode=needs-onboard`；
+24. `/sbtd off` 后 Root Facts/Always-on 仍有效；
+25. `.omp/AGENTS.md` 的 `@../AGENTS.md` 导入；
+26. 同层 Native Adapter 对根独立 AGENTS 的预期 Shadow；
+27. 更近 Workspace `.omp/AGENTS.md` nearest-native Detection；
+28. Managed Block 外用户内容保持；
+29. Old-template Digest 迁移与未知文件 `managedAssetState=merge-required`；
+30. Upstream 新增 Unmapped Section 阻断 CI；
+31. Plugin Update → Plan → Reset → New Session 的三文件同步闭环；
+32. Plugin Install 环境 Diff 为零非 Plugin 写入；
+33. `/sbtd onboard plan` 零写入；
+34. Onboard 后未 Reload 时不得声称新 Skills/MCP `callability=callable`；
+35. `/sbtd help` 全命令与嵌套命令 Snapshot；
+36. Help 零模型调用、零 Session Mutation；
+37. Registry/Handler/Help/Docs 一致性；
+38. Unknown Command 的候选和 Help 提示；
+39. Draft `enabled`/裸 `mode` 的无歧义迁移、冲突拒绝和未知 `stateVersion` repair path。
 
 ## 5. P0 退出标准
 
@@ -718,8 +759,8 @@ P0 完成必须满足：
 - `.omp/AGENTS.md` 导入根事实并正确处理 nearest-native；
 - Plugin Install/Load 与 `/sbtd on` 通过零环境写入测试；
 - `/sbtd onboard` 是 P0 唯一产品化 Onboard 入口；
-- Fresh Install 的 `needs-onboard`、完整配置后的 `managed`、缺根事实的 `degraded` 可重复；
-- `/sbtd on/off` 的 `enforced/advisory` 语义可验证；
+- Fresh Install 的 `environmentMode=needs-onboard`、完整配置后的 `environmentMode=managed`、accepted-skip 条件满足后的 `environmentMode=degraded` 可重复；
+- Runtime Mode、Policy Profile 与 Effective Control State 的独立语义和组合矩阵可验证；
 - 上游三目标转换/同步流水线通过，所有 Section 已映射且无语义漂移；
 - Onboard 与 Runtime 对 Trellis/GitNexus/MCP 的职责没有交叉写入；
 - 已收集足够数据决定哪些逻辑进入 KPi Core。
@@ -783,11 +824,11 @@ kpi doctor
 
 ### P1-E2：默认 SBTD 体验
 
-- `kpi` 与 `kpi run` 默认启用；
-- `--sbtd=off|on`；
-- 项目配置可覆盖；
+- `kpi` 与 `kpi run` 默认设置 `runtimeMode=enforced`；
+- `--sbtd=off|on` 只覆盖 Runtime Mode；
+- 项目配置提供 Runtime Mode 与 Policy Profile 默认值，Session 命令分别覆盖；
 - 直接 OMP 仍需 `/sbtd on`；
-- 首屏显示 Runtime、Provider、SBTD Mode、Project、Trellis、Kit Version。
+- 首屏分别显示 Runtime、Provider、Runtime Mode、Policy Profile、Environment Mode、Effective Control State、Project、Trellis 和 Kit Version。
 
 ### P1-E3：Runtime Bootstrap
 
@@ -845,10 +886,11 @@ kpi kit doctor
 - OMP Global、根 Project、OMP Project Adapter 三类路径、是否加载、Managed Digest、模板/Kit 版本；
 - `@../AGENTS.md` Import、Provider Shadow、nearest-native Adapter 与 Deep AGENTS 层级；
 - Plugin 是否加载；
-- Environment Mode：managed/needs-onboard/degraded/blocked；
-- Runtime Mode：enforced/advisory；
+- `environmentMode: managed|needs-onboard|degraded|blocked`；
+- `runtimeMode: enforced|advisory`；
+- `policyProfile: strict|relaxed` 与派生 `effectiveControlState: active|advisory|preflight-only|blocked`；
 - Required Skills；
-- Trellis/GitNexus/MCP 的 installed/configured/callable/project-ready；
+- Trellis/GitNexus/MCP 的 Tool Evidence 五个独立 facet：installation/configuration/callability/projectReadiness/freshness；
 - AGENTS 与 Kit Machine Rules 的冲突；
 - 建议的 Onboard 修复命令，但未经确认不执行写入。
 
@@ -867,7 +909,7 @@ kpi rules list|doctor
 - Catalog/Schema 校验；
 - Bundle/External 来源可见；
 - Stable Set 与 Revision 可见；
-- Tool Availability 与 Installed 分离。
+- Tool Evidence 的 installation、configuration、callability、projectReadiness 与 freshness 全部分离。
 
 ### P1-E6：Provider UX
 
@@ -911,9 +953,9 @@ CLI > Project > User > Defaults
 配置：
 
 - Runtime；
-- SBTD Mode；
+- Runtime Mode；
+- Policy Profile；
 - Kit；
-- Policy；
 - Model Roles；
 - Provider References；
 - Rules；
@@ -1036,7 +1078,10 @@ Runtime Adapter 负责翻译，Core 不使用 OMP 私有 Event 类型。
 - Decision Log；
 - Transition Guard；
 - Headless Replay；
-- Versioned State Migration。
+- `SBTDSessionStateV1` 与 Versioned State Migration；
+- Runtime Mode、Policy Profile、Environment Mode 三个持久化维度及派生 Effective Control State；
+- Gate/Reviewer、Check/Validation、Capability、Tool Evidence 和 Evidence Envelope 的 namespaced state types；
+- 未知版本、非法枚举和冲突兼容字段的 fail-closed repair path。
 
 ### P2-E3：Rule Engine
 
@@ -1070,8 +1115,8 @@ Runtime Adapter 负责翻译，Core 不使用 OMP 私有 Event 类型。
 - Report Artifact Guard；
 - BDD Trace；
 - Web/Mobile/API；
-- Evidence State；
-- Final Report Schema；
+- Evidence 的 `evidenceSource`、`sourceRevision`、`environmentAlignment` 与 `evidencePublication`；
+- 使用 `checkRequirement` 和 `validationStatus` 的 Final Report Schema；
 - Artifact Sanitization。
 
 ### P2-E6：Context Engine
@@ -1139,7 +1184,7 @@ licenses/
 - Semantic Drift Test；
 - Template Version Migration；
 - Shadow/nearest-native Contract；
-- `enforced/advisory` Mode Contract。
+- 统一 `runtime-mode`、`policy-profile`、`environment-mode`、`effective-control-state` 与 `state-version` Marker Contract。
 
 验收：
 
@@ -1150,6 +1195,7 @@ licenses/
 - OMP、Pi 使用各自 Global/Project Adapter，但共享根 Project Facts Contract；
 - Runtime Adapter 能表达 Import/Inheritance 或提供等价 Context Bridge；
 - 项目事实仍以根 Project AGENTS、深层规则和结构化项目配置为准。
+- Conditional Section 只读取 `effective-control-state=active`，不能各自重新推导 Mode。
 
 ### P2-E8：Onboard TypeScript 迁移
 
@@ -1302,6 +1348,8 @@ shutdown
 capabilities
 ```
 
+Runtime Contract 必须读写 `SBTDSessionStateV1`，但不得让 Adapter 重命名字段、扩展枚举或持久化 `effectiveControlState`。
+
 ### P3-E2：runtime-omp 标准化
 
 将 P0 Plugin Host 适配为正式 Adapter：
@@ -1348,6 +1396,8 @@ capabilities
 | Subagents | 原生 Task | 可扩展 | Channel Bridge |
 | Custom UI | 丰富 | TUI Extension | 最小公共集 |
 
+每个 Runtime/能力组合必须输出 `capabilityStatus=native|adapter|degraded|unsupported` 和证据。`degraded` 只允许用于 Optional capability 的契约化弱路径；缺失 Required capability 必须让依赖 Route 得到 `environmentMode=blocked`，Prompt 模拟不得冒充能力等价。
+
 ### P3-E5：双 Runtime Compatibility Suite
 
 核心场景在两 Runtime 执行：
@@ -1365,11 +1415,13 @@ capabilities
 
 比较：
 
-- Stage；
-- Route；
-- Gate；
-- Tool Evidence；
-- Final Status；
+- `runtimeMode`、`policyProfile`、`environmentMode` 与派生 `effectiveControlState`；
+- `stageStatus` 与 Route；
+- `gateState` 与 Gate-specific `reviewerStatus`；
+- Tool Evidence 五个 facet；
+- `checkRequirement` 与 `validationStatus`；
+- Runtime `capabilityStatus`；
+- Evidence Envelope 状态；
 - Report Schema。
 
 允许 UI/Tool Detail 不同，不允许语义静默不同。
@@ -1529,12 +1581,15 @@ Compatibility Check
 - External Skill Rollback；
 - Session Compaction；
 - Provider Credential Redaction；
-- Global/Root/OMP Adapter Hierarchy、Import、Shadow/nearest-native 与 Degraded Mode；
-- `enforced/advisory` Conformance；
+- Global/Root/OMP Adapter Hierarchy、Import、Shadow/nearest-native 与 `environmentMode` 判定；
+- Runtime Mode × Policy Profile 四组合 Resume Conformance；
+- Runtime Mode × Environment Mode 八组合 Effective Control State Conformance；
+- accepted-skip scope/Profile/Kit-major/expiry 与 Route-change Cases；
 - `/sbtd help` Registry/Handler/Docs Snapshot；
 - Trellis Onboard-vs-Runtime Boundary；
-- GitNexus MCP/Index/Freshness Matrix；
-- MCP Configured-vs-Callable Matrix。
+- GitNexus Tool Evidence/Index Freshness/Compatibility Matrix；
+- Tool Evidence 五 facet 独立组合 Matrix；
+- Draft State Migration、冲突字段、未知版本和 repair path。
 
 ### 20.3 Release Blockers
 
@@ -1546,15 +1601,18 @@ Compatibility Check
 - 凭据进入日志/报告/Context；
 - Project-only 修改 Global State；
 - External Skill Transaction 无法恢复且不报告；
-- Resume 丢失 Gate/Stage；
+- Resume 丢失 Runtime Mode、Policy Profile、Stage/Gate，或未重新观测 Environment；
 - 管理命令被发送给模型；
-- 未声明 Runtime/Provider 降级；
+- Runtime capability 未记录 `capabilityStatus`，或 Optional 降级被用于缺失 Required capability；
 - P0 Runtime 静默删除/覆盖 AGENTS，或破坏 Managed Block 外内容；
 - `.omp/AGENTS.md` 缺少/错误导入根 Project AGENTS；
 - `/sbtd help` 与实际命令 Handler 漂移；
 - Project-only 修改 Global AGENTS/Skills/Tools/MCP；
 - GitNexus 仅凭 CLI/目录即声称 MCP 影响分析已完成；
 - License/NOTICE 缺失。
+- 同一环境事实可得到多个 `environmentMode`，或 `degraded` 缺少 accepted-skip provenance；
+- 持久化 `enabled`、裸 `mode` 或派生 `effectiveControlState`；
+- Gate/Reviewer、Check/Validation、Capability/Environment 或 Tool Evidence facets 被合并为单一状态；
 
 ---
 
@@ -1603,11 +1661,12 @@ Compatibility Check
 - 三类 Managed Block 和块外内容保留；
 - 旧 `--skip-project-agents` 的弃用映射；
 - Section Mapping、三个 Generated Digests 和 Unmapped Release Gate；
-- `/sbtd on/off` 的 `enforced/advisory`；
+- `/sbtd on/off` 的 `runtimeMode`、`/sbtd strict/relaxed` 的 `policyProfile`、Preflight 的 `environmentMode` 与派生 `effectiveControlState`；
 - `/sbtd help` Registry Contract；
 - Trellis Onboard 初始化例外；
 - MCP 用户级 Scope；
 - Project-only Global State 隔离。
+- `stateVersion`、namespaced state fields、兼容迁移和 fail-closed repair path。
 
 ## 23. 兼容性与升级策略
 
@@ -1649,14 +1708,14 @@ Compatibility Check
 - [ ] `/sbtd` Commands
 - [ ] Command Registry + `/sbtd help [command]`
 - [ ] `/sbtd onboard` Commands/Setup Wizard
-- [ ] Session State
+- [ ] Canonical Session State v1 + State Conformance
 - [ ] Classifier/Routes
 - [ ] Book Gate Plan
 - [ ] Kit Loader
 - [ ] OMP Native Global Path Resolver
 - [ ] Root Project Facts Contract
 - [ ] OMP Project Adapter + `@../AGENTS.md`
-- [ ] Mode-aware AGENTS (`enforced/advisory`)
+- [ ] Mode-aware AGENTS（Effective Control State）
 - [ ] Managed Block Merge/Preservation
 - [ ] Shadow Detection
 - [ ] Upstream AGENTS 三目标 Section Mapping（P0-B）
@@ -1688,6 +1747,7 @@ Compatibility Check
 
 - [ ] Core Event Contract
 - [ ] Workflow Engine
+- [ ] Versioned State Migration/Repair
 - [ ] Rule Engine
 - [ ] Policy Engine
 - [ ] Validation Engine
@@ -1705,7 +1765,7 @@ Compatibility Check
 - [ ] Runtime Contract v1
 - [ ] Runtime OMP Final
 - [ ] Runtime Pi
-- [ ] Capability Matrix
+- [ ] Capability Status Matrix
 - [ ] Compatibility Suite
 - [ ] CLI Delegation Feasibility
 - [ ] Channel/Subagent Bridge
@@ -1721,11 +1781,11 @@ Compatibility Check
 一个阶段只有在以下条件全部满足时才算完成：
 
 1. 功能代码、Schema、文档和测试同步；
-2. 用户可见行为有 BDD 或明确 not-needed；
-3. Required Book Gates 已通过；
-4. 项目原生验证已执行；
+2. 用户可见行为有 BDD 或明确 `checkRequirement=not-applicable`；
+3. Required Book Gates 的 `gateState=passed` 且 reviewer status 达到对应通过值；
+4. 项目原生验证已执行并记录 `validationStatus`；
 5. 正式报告满足 Artifact Gate；
-6. 失败、跳过、阻塞和剩余风险已列出；
+6. `validationStatus=failed|skipped|blocked`、`onboardProjectStatus` 和剩余风险按字段列出；
 7. Provider/Credential 无泄露；
 8. 安装、升级、回滚路径可验证；
 9. License/NOTICE 完整；
