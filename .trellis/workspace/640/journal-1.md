@@ -38,3 +38,36 @@ Recorded KPi product-boundary decisions, renamed v0.7 PRD and ROADMAP files, and
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Revise KPi v0.7 document contracts
+
+**Date**: 2026-07-22
+**Task**: Revise KPi v0.7 document contracts
+**Branch**: `main`
+
+### Summary
+
+Unified KPi v0.7 PRD and ROADMAP ownership, state, lifecycle, BDD, and validation contracts; corrected final validation order.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ac781c9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
