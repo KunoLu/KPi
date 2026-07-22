@@ -1,0 +1,28 @@
+{
+  "id": "review-kpi-v0-7-boundaries",
+  "name": "review-kpi-v0-7-boundaries",
+  "title": "Review KPi v0.7 product boundaries",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "640",
+  "assignee": "640",
+  "createdAt": "2026-07-21",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-22-unify-kpi-v0-7-state-contracts"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
