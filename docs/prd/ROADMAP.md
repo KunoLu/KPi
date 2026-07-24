@@ -4,7 +4,7 @@
 > **文档日期**：2026-07-21  
 > **对应 PRD**：`PRD.md`  
 > **路线原则**：**OMP-first → KPi CLI → KPi Core → 双 Runtime → 必要时受控 Fork**  
-> **SBTD 基线**：`KunoLu/640-skills main @ 340f9dd4dc7a92e8b91c31e111de9a8de06cef36`  
+> **SBTD 基线**：`SBTD Workflow Kit`（`sourceId=sbtd-workflow-kit-upstream`，`https://github.com/KunoLu/640-skills`）@ `340f9dd4dc7a92e8b91c31e111de9a8de06cef36`
 > **说明**：P0～P3 是按依赖顺序排列的实施优先级，不是并行开发泳道，也不是缺陷等级。  
 > **0.7 更新重点**：将项目规则拆为根 `AGENTS.md` 跨 Agent 事实层与 `.omp/AGENTS.md` OMP/KPi Adapter；增加 `@../AGENTS.md` 导入、双项目 Managed Block、Monorepo nearest-native 检测、三目标上游同步，以及由统一 Command Registry 生成的 `/sbtd help [command]`。
 
@@ -39,7 +39,7 @@ Controlled Fork（仅在必要时）
 
 ## 2. P0 目标
 
-以最小的底层自研成本，把 `640-skills` 中最关键的 SBTD 行为转换为 OMP 可执行插件，验证：
+以最小的底层自研成本，把 `SBTD Workflow Kit` 中最关键的 SBTD 行为转换为 OMP 可执行插件，验证：
 
 1. `/sbtd on` 是否能稳定改变后续每轮的工作流；
 2. Book Gate、BDD、Trellis、GitNexus、Validation 与 Report 能否被结构化执行；
@@ -119,7 +119,7 @@ P0-A 退出标准：
 ### P0-B：上游 AGENTS 三目标转换与同步（P0 发布前完成）
 
 ```text
-640-skills pinned snapshot
+SBTD Workflow Kit locked source URI + resolved full SHA
   → Markdown Section Parse
   → agents-section-map.yaml
   → Global / Root Project / OMP Adapter Generator
@@ -130,7 +130,7 @@ P0-A 退出标准：
 
 范围：
 
-- `upstream.lock.json`；
+- `upstream.lock.json`（`sourceId`、canonical source URI、resolved full SHA、可选 source tag、source digest）；
 - `agents-section-map.yaml`；
 - Transform Version；
 - `AGENTS.global.md`；
@@ -152,6 +152,18 @@ P0-B 退出标准：
 
 ## 4. P0 交付物
 
+### SBTD Kit 制品生命周期与命名
+
+`SBTD Kit` 是唯一产品制品名称；`SBTD Workflow Kit` 是由 `sourceId=sbtd-workflow-kit-upstream`、canonical source URI `https://github.com/KunoLu/640-skills` 与 resolved full SHA 锁定的外部上游基线和 provenance identity；`sbtd-workflow-kit/` 是独立内部转换目录，负责将该基线转换为 SBTD Kit；`@kpi/omp-sbtd` 只表示 OMP Plugin 包。
+
+| 阶段 | SBTD Kit 形态 | 发行边界 |
+|---|---|---|
+| P0 | 固定 Revision、只读、嵌入 `@kpi/omp-sbtd` 的 Bootstrap Snapshot | 不独立安装或发布；Plugin 安装不写入用户/项目环境 |
+| P1 | 同一 Bootstrap Snapshot 由不可变 Manifest、`kpi kit` 管理面和 Doctor 观察 | 仍随受支持 Plugin/CLI 分发，不承诺独立 Kit release |
+| P2 | 包含 catalog、schemas、rules、workflows 和 licenses 的独立版本化 SBTD Kit | 可独立发布、升级和被 Runtime Adapter 消费 |
+
+所有阶段均从 `upstream.lock.json` 中锁定的 sourceId、canonical source URI、resolved full SHA、可选 source tag 与 source digest 生成，并记录 Revision 与 Digest；不得使用 Floating Main、未审阅 remote fetch 或 Git submodule 作为用户消费路径（与 `PRD.md` 的 D-014 一致）。
+
 ### P0-E1：插件骨架
 
 交付：
@@ -159,7 +171,7 @@ P0-B 退出标准：
 - `@kpi/omp-sbtd` 包；
 - OMP Plugin Manifest；
 - Feature/Settings Schema；
-- 固定版本、只读的 SBTD Kit Bootstrap Source；
+- 固定 Revision、只读、嵌入 Plugin 的 SBTD Kit Bootstrap Snapshot；
 - Plugin ↔ Kit Revision 映射；
 - 插件安装、启用、禁用、Doctor 文档；
 - 支持固定 OMP 版本范围。
@@ -208,15 +220,15 @@ P0-B 退出标准：
 - `/sbtd help` 在所有 `environmentMode` 和 `runtimeMode` 下可用；
 - `/sbtd help <nested command>` 支持如 `onboard init`；
 - Help 不调用模型、不创建 Agent Turn、不修改 Session；
-- `/sbtd on` 原子执行“准备目标 Runtime Mode/Profile/Route → 只读 Preflight → 可确定时提交 `runtimeMode=enforced` 与当前 Environment observation → 派生 Effective Control State”；evaluator 失败保留命令前状态并返回 repair path；
+- `/sbtd on` 原子执行“准备目标 Runtime Mode、Onboard Profile 与 Route → 只读 Preflight → 可确定时提交 `runtimeMode=enforced` 与当前 Environment observation → 派生 Effective Control State”；evaluator 失败保留命令前状态并返回 repair path；
 - 未完成 normal Onboard 且无 accepted-skip 时返回 `environmentMode=needs-onboard`，不自动安装；
 - `/sbtd onboard plan` 零写入；
 - Apply 类命令显示计划并获得确认；
-- `/sbtd off` 只设置 `runtimeMode=advisory`，保留 Policy Profile、AGENTS、Skills、Tools 和历史报告；
-- `/sbtd status` 按字段名显示 Environment Mode、Runtime Mode、Policy Profile、Effective Control State、Stage、Route、Book Gates、三层 AGENTS、Tool Evidence、Validation Status 和 Provider；
+- `/sbtd off` 只设置 `runtimeMode=advisory`，保留 Policy Profile、Onboard Profile、AGENTS、Skills、Tools 和历史报告；
+- `/sbtd status` 按字段名显示 Environment Mode、Runtime Mode、Policy Profile、Onboard Profile、Effective Control State、Stage、Route、Book Gates、三层 AGENTS、Tool Evidence、Validation Status 和 Provider；
 - `/sbtd strict|relaxed` 只修改 `policyProfile`，不得修改 Runtime Mode 或关闭 Route-required Checks；
 - 命令在 Resume 后保持一致，Environment 重新观测，Effective Control State 重新派生。
-- Route 或 Policy Profile 改变必须使用同一原子 re-observation 事务；在新 Environment observation 可确定前不得使用新的 Effective Control State。
+- Route、Policy Profile 或 Onboard Profile 改变必须使用同一原子 re-observation 事务；在新 Environment observation 可确定前不得使用新的 Effective Control State。
 
 ### P0-E2A：首次使用与 Onboard UX
 
@@ -240,7 +252,7 @@ OMP Provider/Login 已配置
 - P0 不依赖尚未发布的 `kpi` CLI；
 - Plugin Install 和 Onboard 是两个独立事务；
 - `/sbtd setup` 是 Plan Wizard，不直接 Apply；
-- Plan 显示 Kit Revision、Source Policy、Global/Root/OMP Adapter 三类目标路径、Managed Digests、备份和可选项；
+- Plan 显示 Kit Revision、锁定的上游 sourceId/URI/SHA、Global/Root/OMP Adapter 三类目标路径、Managed Digests、备份和可选项；仅 Optional 且非 Route-required 的省略目标可显示 `create-accepted-skip` action；
 - Onboard 完成后，如果 Runtime 不能完整 Reload AGENTS/Skills/MCP，必须要求新 Session；
 - `/sbtd on` 不得把 “configured” 当成 “callable”。
 
@@ -250,7 +262,7 @@ OMP Provider/Login 已配置
 - 完成 Onboard 并新建 Session 后进入 `environmentMode=managed`；
 - 无根 Project AGENTS 且无 accepted-skip 时进入 `environmentMode=needs-onboard`；
 - 无 OMP Project Adapter 且无 accepted-skip 时进入 `environmentMode=needs-onboard`；
-- 仅 Optional 项目上下文缺失、accepted-skip 有效且 Route 不依赖缺口时进入 `environmentMode=degraded`；
+- 仅 Optional 项目上下文缺失、有效 `AcceptedSkipV1` 由独立确认的 `create-accepted-skip` Plan action 创建、且 Route 不依赖缺口时进入 `environmentMode=degraded`；
 - 用户取消 Plan 后无任何环境变化；
 - 同一 Plan 重复执行保持现有 Onboard 幂等和回滚语义。
 
@@ -310,6 +322,7 @@ message_update / ttsr_triggered（可用时）
 stateVersion: 1
 runtimeMode: enforced | advisory
 policyProfile: strict | relaxed
+onboardProfileId: <catalog profile id>
 securityBaseline: local-guarded
 environmentMode: managed | needs-onboard | degraded | blocked
 environmentObservedAt
@@ -342,6 +355,7 @@ agents:
 |---|---|---|---|
 | `runtimeMode` | `enforced \| advisory` | Session / 用户命令 | 是 |
 | `policyProfile` | `strict \| relaxed` | Session / Policy | 是 |
+| `onboardProfileId` | SBTD Kit `catalog.json` 中定义的稳定 Profile 标识 | Session / Onboard selection | 是 |
 | `securityBaseline` | `local-guarded` 等独立安全基线标识 | Policy / 安全配置 | 是，独立于 Policy Profile |
 | `environmentMode` | `managed \| needs-onboard \| degraded \| blocked` | Preflight / Environment Management | 是，连同观测时间 |
 | `effectiveControlState` | `active \| advisory \| preflight-only \| blocked` | 状态选择器 | 否，只派生 |
@@ -357,15 +371,15 @@ agents:
 | `environmentAlignment` | `verified \| unverified \| mismatch \| not-needed` | Evidence Envelope | 是 |
 | `evidencePublication` | `local-only \| published \| blocked \| not-configured \| not-needed` | Evidence Envelope | 是 |
 
-Environment Mode 按 `blocked` → `needs-onboard` → `degraded` → `managed` 首个命中项唯一判定；`degraded` 要求当前 Route 的 Required 能力完整，并且每个 Optional 缺口都有匹配 scope、Profile、Kit major 且未过期的 accepted-skip provenance。
+Environment Mode 按 `blocked` → `needs-onboard` → `degraded` → `managed` 首个命中项唯一判定；`degraded` 要求当前 Route 的 Required 能力完整，并且每个 Optional 缺口都有匹配 scope、`onboardProfileId`、Kit major 且未过期的 accepted-skip provenance。
 
 验收：
 
 - Compaction 前后持久化字段不重置；
 - Branch/Switch 后按 Session 重建；
 - State 使用非 LLM Persistent Entry；
-- 四种 Runtime Mode × Policy Profile 组合、八种 Runtime Mode × Environment Mode 派生组合都有 Fixture；
-- Resume 恢复 Runtime Mode 与 Policy Profile，重新观测 Environment Mode，并重算 Effective Control State；
+- 四种 Runtime Mode × Policy Profile 组合、所选 Onboard Profile 的 Required/Optional 基线矩阵，以及八种 Runtime Mode × Environment Mode 派生组合都有 Fixture；
+- Resume 恢复 Runtime Mode、Policy Profile 与 `onboardProfileId`，重新观测 Environment Mode，并重算 Effective Control State；
 - Draft `enabled`/裸 `mode` 只允许无歧义兼容迁移；冲突字段、未知版本和非法枚举 fail closed；
 - 三层 AGENTS 状态和 Import/Shadow 信息可恢复；
 - 关键变化同时产生可读 UI 状态。
@@ -439,11 +453,11 @@ Gate-specific `reviewerStatus` 的状态域与恢复路径必须与 PRD 11.2 完
 - Release Gate 必须位于验证之后；
 - Required Gate 未通过时阻断相应阶段。
 
-### P0-E6：SBTD Kit Loader
+### P0-E6：SBTD Kit Bootstrap Snapshot Loader
 
 加载：
 
-- Plugin 内固定版本、只读的 SBTD Kit Bootstrap Source；
+- Plugin 内固定 Revision、只读、不可独立安装的 SBTD Kit Bootstrap Snapshot；
 - OMP Global AGENTS、根 Project AGENTS、OMP Project Adapter 与 Deep AGENTS；
 - 15 Bundled Skills；
 - 14 External Skills；
@@ -468,7 +482,7 @@ Gate-specific `reviewerStatus` 的状态域与恢复路径必须与 PRD 11.2 完
 - Context 使用可观察；
 - 重复 Turn 不重复注入完整 Skill；
 - Skill 版本和来源进入 Doctor；
-- Legacy `kuno-workflow-onboard-skills` 不作为别名保留。
+- 固定 revision migration map 中的旧 Onboard Skill ID 不作为别名保留。
 
 ### P0-E6A：三层 AGENTS Contract Bridge
 
@@ -481,7 +495,7 @@ Gate-specific `reviewerStatus` 的状态域与恢复路径必须与 PRD 11.2 完
 - Global/Root/Adapter/Deep AGENTS 发现；
 - Root Facts Context Bridge 与内容摘要去重；
 - OMP Provider Shadow/nearest-native Detection；
-- 包含 `runtime-mode`、`policy-profile`、`environment-mode`、`effective-control-state` 和 `state-version` 的 Runtime Marker；
+- 包含 `runtime-mode`、`policy-profile`、`onboard-profile-id`、`environment-mode`、`effective-control-state` 和 `state-version` 的 Runtime Marker；
 - 三类 Managed Block Parse/Replace；
 - 用户内容保留；
 - 旧已知模板迁移；
@@ -530,7 +544,7 @@ ignored-with-reason
 
 同步流程：
 
-1. 固定 `640-skills` Commit/Tag；
+1. 固定 `SBTD Workflow Kit` 的 resolved full SHA（可选记录来源 Tag）；
 2. 比较 AGENTS/Catalog/Skills；
 3. Markdown AST 按 Heading/Section Digest 识别；
 4. 应用 Owner 或显式 Split Targets；
@@ -648,7 +662,7 @@ evidence
 blockedReason
 ```
 
-`AcceptedSkipV1` 由 Environment Management / Provenance Inventory 按 `schemaVersion`、`recordId`、asset-or-capability、scope、Profile、Kit major、confirmation actor/time、expiry、`active|revoked|expired` status、reason、evidence reference 与 provenance/version metadata 保存。Environment observer 只接受 active、未过期、精确匹配 scope/Profile/Kit major 的记录；Route-required capability 永远不能跳过。创建、撤销、过期均为 Plan-first 版本化操作，Doctor/Report/Evidence 输出 owner、validity、provenance 与 repair path。
+`AcceptedSkipV1` 由 Environment Management / Provenance Inventory 按 `schemaVersion`、`recordId`、asset-or-capability、scope、`onboardProfileId`、Kit major、confirmation actor/time、expiry、`active|revoked|expired` status、reason、evidence reference 与 provenance/version metadata 保存。仅当所选 Onboard Profile 将目标标为 Optional、且当前 Route 不依赖缺口时，`/sbtd onboard plan` 才可添加 `create-accepted-skip` action；该 action 必须列出 asset-or-capability、scope、`onboardProfileId`、Kit major、expiry 与 reason，并在 Apply 前独立确认。Environment observer 只接受 active、未过期、精确匹配 scope/`onboardProfileId`/Kit major 的记录；Route-required capability 永远不能跳过。创建、撤销、过期均为 Plan-first 版本化操作，Doctor/Report/Evidence 输出 owner、validity、provenance 与 repair path。
 
 `managedAssetState=merge-required` 时，Plan 只允许保留并阻断、用户手工合并后重新 Plan，或由 recorded prior digest 授权的已知模板迁移。Apply 立即重验 provenance/digest，按适用情况写入或保留 backup，记录 operation id、selected action 与 residuals，并以 `exact|merge-required|blocked` 终结；completed operation 重试返回既有结果，陈旧 digest 必须重做 Plan，Rollback 只恢复重验过的精确 prior block。
 
@@ -730,13 +744,13 @@ runtime selection result
 14. 缺 OMP Global AGENTS、无 accepted-skip → `environmentMode=needs-onboard`；
 15. 缺 OMP Project Adapter、无 accepted-skip → `environmentMode=needs-onboard`；
 16. 缺根 Project AGENTS、无 accepted-skip → `environmentMode=needs-onboard`；
-17. 仅 Optional 上下文缺失、accepted-skip 有效且 Route 不依赖缺口 → `environmentMode=degraded`；
+17. 仅 Optional 上下文缺失、由独立确认的 `create-accepted-skip` action 创建的 accepted-skip 有效且 Route 不依赖缺口 → `environmentMode=degraded`；
 18. `/sbtd on` 与 `/sbtd off` 只改变 `runtimeMode`；
 19. `/sbtd strict` 与 `/sbtd relaxed` 只改变 `policyProfile`；
 20. Runtime Mode × Policy Profile 四种持久化/Resume 组合；
 21. Runtime Mode × Environment Mode 八种 `effectiveControlState` 派生组合；
 22. Route 变化使原 `degraded` 缺口变成 Required → `environmentMode=blocked`；
-23. accepted-skip 过期或 scope/Profile/Kit major 不匹配 → `environmentMode=needs-onboard`；
+23. accepted-skip 过期或 scope/`onboardProfileId`/Kit major 不匹配 → `environmentMode=needs-onboard`；
 24. `/sbtd off` 后 Root Facts/Always-on 仍有效；
 25. `.omp/AGENTS.md` 的 `@../AGENTS.md` 导入；
 26. 同层 Native Adapter 对根独立 AGENTS 的预期 Shadow；
@@ -792,15 +806,19 @@ P0 完成必须满足：
 
 ## 7. P1 目标
 
-让用户无需理解 OMP Plugin 安装细节即可使用 KPi：
+让用户无需理解 OMP Plugin 安装细节即可使用 KPi；`kpi` 默认请求 `runtimeMode=enforced`，但只有 `managed` 或合规 `degraded` 才派生 `effectiveControlState=active`：
 
 ```text
 kpi
   → 检查 Runtime
   → 检查/安装 Plugin
-  → 加载 SBTD Kit
-  → 默认开启 SBTD
-  → 启动 OMP Session
+  → 加载 SBTD Kit Bootstrap Snapshot
+  → 执行只读 Preflight
+  → needs-onboard：显示 Onboard Plan
+      → 用户确认 Apply → 验证 → 完整 Reload / 新 Session → enforced + managed → active
+      → 用户拒绝 → 启动 runtimeMode=enforced、environmentMode=needs-onboard 的 Session → preflight-only
+  → managed：启动 OMP Session 并提交 runtimeMode=enforced → active
+  → degraded：仅在有效 AcceptedSkipV1 覆盖 Optional 非 Route-required 缺口时启动 → active
 ```
 
 P1 建立品牌、配置、安装、Doctor、Onboard、Provider、Session 和 Report 的产品边界。
@@ -834,9 +852,9 @@ kpi doctor
 
 - `kpi` 与 `kpi run` 默认设置 `runtimeMode=enforced`；
 - `--sbtd=off|on` 只覆盖 Runtime Mode；
-- 项目配置提供 Runtime Mode 与 Policy Profile 默认值，Session 命令分别覆盖；
+- 项目配置提供 Runtime Mode、Policy Profile 与 Onboard Profile 默认值，Session 命令分别覆盖；
 - 直接 OMP 仍需 `/sbtd on`；
-- 首屏分别显示 Runtime、Provider、Runtime Mode、Policy Profile、Environment Mode、Effective Control State、Project、Trellis 和 Kit Version。
+- 首屏分别显示 Runtime、Provider、Runtime Mode、Policy Profile、Onboard Profile、Environment Mode、Effective Control State、Project、Trellis 和 Kit Version。
 
 ### P1-E3：Runtime Bootstrap
 
@@ -913,9 +931,9 @@ kpi rules list|enable|disable|doctor
 
 要求：
 
-- Kuno/SBTD Kit Version 可见；
+- SBTD Kit Version、Manifest Revision 与 Digest 可见；
 - Catalog/Schema 校验；
-- Bundle/External 来源可见；
+- Bundle/External 来源可见；`SBTD Workflow Kit` 作为外部上游基线与 provenance identity 展示；
 - Stable Set 与 Revision 可见；
 - Tool Evidence 的 installation、configuration、callability、projectReadiness 与 freshness 全部分离。
 
@@ -1006,7 +1024,7 @@ P1 Upgrade/Uninstall 以 Provenance Inventory 为选择依据，提供 `project|
 
 ## 9. P1 退出标准
 
-- 新用户只安装/运行 KPi 即可完成首个 SBTD Task；
+- 新用户安装/运行 KPi 后，可完成显式 Plan/confirmation、Reload/new Session 与状态验证，并在 `managed` 或合规 `degraded` 环境中完成首个 SBTD Task；
 - KPi 能准确修复或引导 Runtime/Plugin/Kit 缺失；
 - Onboard 完整兼容当前 Python 接口；
 - Provider Doctor 不误报订阅/Key 可用；
@@ -1055,7 +1073,7 @@ packages/
   skill-registry/
   onboard/
   runtime-omp/
-  kuno-workflow-kit/
+  sbtd-workflow-kit/
 ```
 
 ## 13. P2 交付物
@@ -1093,7 +1111,7 @@ Runtime Adapter 负责翻译，Core 不使用 OMP 私有 Event 类型。
 - Transition Guard；
 - Headless Replay；
 - `SBTDSessionStateV1` 与 Versioned State Migration；
-- Runtime Mode、Policy Profile、Security Baseline、Environment Mode 四个持久化维度及派生 Effective Control State；
+- Runtime Mode、Policy Profile、`onboardProfileId`、Security Baseline、Environment Mode 五个持久化维度及派生 Effective Control State；
 - Gate/Reviewer、Check/Validation、Capability、Tool Evidence 和 Evidence Envelope 的 namespaced state types；
 - 未知版本、非法枚举和冲突兼容字段的 fail-closed repair path。
 
@@ -1156,9 +1174,9 @@ lesson://
 session://
 ```
 
-### P2-E7：Kuno Workflow Kit
+### P2-E7：SBTD Kit 独立发布制品
 
-将 `640-skills` 转为版本化 Kit：
+将 P0/P1 的 SBTD Kit 演进为可独立发布的版本化制品。`SBTD Workflow Kit` 仍是外部上游基线与 provenance identity；`sbtd-workflow-kit/` 仍是独立内部转换目录：
 
 ```text
 kpi-kit.json
@@ -1198,7 +1216,7 @@ licenses/
 - Semantic Drift Test；
 - Template Version Migration；
 - Shadow/nearest-native Contract；
-- 统一 `runtime-mode`、`policy-profile`、`environment-mode`、`effective-control-state` 与 `state-version` Marker Contract。
+- 统一 `runtime-mode`、`policy-profile`、`onboard-profile-id`、`environment-mode`、`effective-control-state` 与 `state-version` Marker Contract。
 
 验收：
 
@@ -1395,7 +1413,7 @@ P3 从 P2 已发布的 Runtime Contract v1 开始接入 Pi 和双 Runtime 兼容
 
 比较：
 
-- `runtimeMode`、`policyProfile`、`environmentMode` 与派生 `effectiveControlState`；
+- `runtimeMode`、`policyProfile`、`onboardProfileId`、`environmentMode` 与派生 `effectiveControlState`；
 - `stageStatus` 与 Route；
 - `gateState` 与 Gate-specific `reviewerStatus`；
 - Tool Evidence 五个 facet；
@@ -1563,7 +1581,7 @@ Compatibility Check
 - Global/Root/OMP Adapter Hierarchy、Import、Shadow/nearest-native 与 `environmentMode` 判定；
 - Runtime Mode × Policy Profile 四组合 Resume Conformance；
 - Runtime Mode × Environment Mode 八组合 Effective Control State Conformance；
-- accepted-skip scope/Profile/Kit-major/expiry 与 Route-change Cases；
+- accepted-skip scope/`onboardProfileId`/Kit-major/expiry 与 Route-change Cases；
 - `securityBaseline` 与 `policyProfile` 独立的配置/Resume conformance；
 - `/sbtd help` Registry/Handler/Docs Snapshot；
 - Trellis Onboard-vs-Runtime Boundary；
@@ -1641,7 +1659,7 @@ Compatibility Check
 - 三类 Managed Block 和块外内容保留；
 - 旧 `--skip-project-agents` 的弃用映射；
 - Section Mapping、三个 Generated Digests 和 Unmapped Release Gate；
-- `/sbtd on/off` 的 `runtimeMode`、`/sbtd strict/relaxed` 的 `policyProfile`、Preflight 的 `environmentMode` 与派生 `effectiveControlState`；
+- `/sbtd on/off` 的 `runtimeMode`、`/sbtd strict/relaxed` 的 `policyProfile`、所选 `onboardProfileId`、Preflight 的 `environmentMode` 与派生 `effectiveControlState`；
 - `/sbtd help` Registry Contract；
 - Trellis Onboard 初始化例外；
 - MCP 用户级 Scope；
@@ -1659,10 +1677,10 @@ Compatibility Check
 - 不自动修改用户 OMP 配置；
 - Breaking Change 先提示和迁移。
 
-### 23.2 `640-skills`
+### 23.2 SBTD Workflow Kit
 
-- Kit 记录 Commit/Tag；
-- 可选择 Floating Main、Pinned Tag、Vendored Snapshot；
+- Kit 记录 sourceId、canonical source URI、resolved full SHA、可选显示其来源 Tag 与 Digest；
+- 用户消费路径只允许固定 SHA 的 Vendored Snapshot 或不可变 Kit Manifest；禁止 Floating Main；
 - Catalog/Schema 版本迁移；
 - Bundled/External Skill Diff；
 - License/NOTICE 校验；
@@ -1732,7 +1750,7 @@ Compatibility Check
 - [ ] Policy Engine
 - [ ] Validation Engine
 - [ ] Context Engine
-- [ ] Kuno Workflow Kit
+- [ ] SBTD Kit 独立发布制品
 - [ ] AGENTS Renderer/Conformance
 - [ ] TS Onboard
 - [ ] Provider Coordination
